@@ -38,7 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/fdlimit"
 	"github.com/ethereum/go-ethereum/consensus"
-	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -145,17 +144,17 @@ var (
 		Name:  "mainnet",
 		Usage: "Ethereum mainnet",
 	}
-	GoerliFlag = cli.BoolFlag{
-		Name:  "goerli",
-		Usage: "Görli network: pre-configured proof-of-authority test network",
+	RopstenFlag = cli.BoolFlag{
+		Name:  "ropsten",
+		Usage: "Ropsten network: pre-configured proof-of-work test network",
 	}
 	RinkebyFlag = cli.BoolFlag{
 		Name:  "rinkeby",
 		Usage: "Rinkeby network: pre-configured proof-of-authority test network",
 	}
-	RopstenFlag = cli.BoolFlag{
-		Name:  "ropsten",
-		Usage: "Ropsten network: pre-configured proof-of-work test network",
+	GoerliFlag = cli.BoolFlag{
+		Name:  "goerli",
+		Usage: "Görli network: pre-configured proof-of-authority test network",
 	}
 	SepoliaFlag = cli.BoolFlag{
 		Name:  "sepolia",
@@ -824,6 +823,36 @@ var (
 	}
 )
 
+var (
+	// TestnetFlags is the flag group of all built-in supported testnets.
+	TestnetFlags = []cli.Flag{
+		RopstenFlag,
+		RinkebyFlag,
+		GoerliFlag,
+		SepoliaFlag,
+		KilnFlag,
+	}
+	// NetworkFlags is the flag group of all built-in supported networks.
+	NetworkFlags = append([]cli.Flag{
+		MainnetFlag,
+	}, TestnetFlags...)
+
+	// DatabasePathFlags is the flag group of all database path flags.
+	DatabasePathFlags = []cli.Flag{
+		DataDirFlag,
+		AncientFlag,
+	}
+)
+
+// GroupFlags combines the given flag slices together and returns the merged one.
+func GroupFlags(groups ...[]cli.Flag) []cli.Flag {
+	var ret []cli.Flag
+	for _, group := range groups {
+		ret = append(ret, group...)
+	}
+	return ret
+}
+
 // MakeDataDir retrieves the currently requested data directory, terminating
 // if none (or the empty string) is specified. If the node is starting a testnet,
 // then a subdirectory of the specified datadir will be used.
@@ -1338,7 +1367,7 @@ func setDataDir(ctx *cli.Context, cfg *node.Config) {
 		// Maintain compatibility with older Geth configurations storing the
 		// Ropsten database in `testnet` instead of `ropsten`.
 		legacyPath := filepath.Join(node.DefaultDataDir(), "testnet")
-		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		if common.FileExist(legacyPath) {
 			log.Warn("Using the deprecated `testnet` datadir. Future versions will store the Ropsten chain in `ropsten`.")
 			cfg.DataDir = legacyPath
 		} else {
@@ -1968,24 +1997,13 @@ func MakeChain(ctx *cli.Context, stack *node.Node) (chain *core.BlockChain, chai
 	if err != nil {
 		Fatalf("%v", err)
 	}
+
 	var engine consensus.Engine
-	if config.Clique != nil {
-		engine = clique.New(config.Clique, chainDb)
-	} else {
-		engine = ethash.NewFaker()
-		if !ctx.GlobalBool(FakePoWFlag.Name) {
-			engine = ethash.New(ethash.Config{
-				CacheDir:         stack.ResolvePath(ethconfig.Defaults.Ethash.CacheDir),
-				CachesInMem:      ethconfig.Defaults.Ethash.CachesInMem,
-				CachesOnDisk:     ethconfig.Defaults.Ethash.CachesOnDisk,
-				CachesLockMmap:   ethconfig.Defaults.Ethash.CachesLockMmap,
-				DatasetDir:       stack.ResolvePath(ethconfig.Defaults.Ethash.DatasetDir),
-				DatasetsInMem:    ethconfig.Defaults.Ethash.DatasetsInMem,
-				DatasetsOnDisk:   ethconfig.Defaults.Ethash.DatasetsOnDisk,
-				DatasetsLockMmap: ethconfig.Defaults.Ethash.DatasetsLockMmap,
-			}, nil, false)
-		}
+	ethashConf := ethconfig.Defaults.Ethash
+	if ctx.GlobalBool(FakePoWFlag.Name) {
+		ethashConf.PowMode = ethash.ModeFake
 	}
+	engine = ethconfig.CreateConsensusEngine(stack, config, &ethashConf, nil, false, chainDb)
 	if gcmode := ctx.GlobalString(GCModeFlag.Name); gcmode != "full" && gcmode != "archive" {
 		Fatalf("--%s must be either 'full' or 'archive'", GCModeFlag.Name)
 	}
